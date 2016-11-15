@@ -759,10 +759,13 @@ int SvnRevision::exportInternal(const char *key, const svn_fs_path_change2_t *ch
 
     QString previous;
     QString prevsvnprefix, prevrepository, preveffectiverepository, prevbranch, prevpath;
+    bool path_from_wasdir=false;
 
     if (path_from != NULL) {
+        path_from_wasdir=wasDir(fs, rev_from, path_from, pool.data());
+
         previous = QString::fromUtf8(path_from);
-        if (wasDir(fs, rev_from, path_from, pool.data())) {
+        if (path_from_wasdir) {
             previous += '/';
         }
         MatchRuleList::ConstIterator prevmatch =
@@ -853,7 +856,8 @@ int SvnRevision::exportInternal(const char *key, const svn_fs_path_change2_t *ch
     // changes across directory re-organizations and wholesale branch
     // imports.
     //
-    if (path_from != NULL && preveffectiverepository == effectiveRepository && prevbranch != branch) {
+    if (path_from != NULL && preveffectiverepository == effectiveRepository && prevbranch != branch &&
+        (previous == prevsvnprefix || !CommandLineParser::instance()->contains("only-note-toplevel-merges"))) {
         if(ruledebug)
             qDebug() << "copy from branch" << prevbranch << "to branch" << branch << "@rev" << rev_from;
         txn->noteCopyFromBranch (prevbranch, rev_from);
@@ -1052,4 +1056,3 @@ int SvnRevision::fetchUnknownProps(apr_pool_t *pool, const char *key, svn_fs_roo
 
     return EXIT_SUCCESS;
 }
-

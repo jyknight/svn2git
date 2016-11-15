@@ -141,6 +141,7 @@ static const CommandLineOption options[] = {
     {"--commit-interval NUMBER", "if passed the cache will be flushed to git every NUMBER of commits"},
     {"--stats", "after a run print some statistics about the rules"},
     {"--svn-branches", "Use the contents of SVN when creating branches, Note: SVN tags are branches as well"},
+    {"--only-note-toplevel-merges", "When inferring merge points, only use copyfrom data when the source is the top-level of a branch."},
     {"--empty-dirs", "Add .gitignore-file for empty dirs"},
     {"--svn-ignore", "Import svn-ignore-properties via .gitignore"},
     {"--propcheck", "Check for svn-properties except svn-ignore"},
