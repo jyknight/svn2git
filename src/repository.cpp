@@ -62,7 +62,7 @@ public:
         void noteCopyFromBranch (const QString &prevbranch, int revFrom);
 
         void deleteFile(const QString &path);
-        QIODevice *addFile(const QString &path, int mode, qint64 length);
+        QIODevice *addFile(const QString &path, int mode, qint64 length, const QByteArray sha1_checksum);
 
         void commitNote(const QByteArray &noteText, bool append,
                         const QByteArray &commit = QByteArray());
@@ -71,6 +71,7 @@ public:
     int setupIncremental(int &cutoff);
     void restoreLog();
     ~FastImportRepository();
+    void checkpoint();
 
     void reloadBranches();
     int createBranch(const QString &branch, int revnum,
@@ -97,7 +98,7 @@ private:
     {
         int created;
         QVector<int> commits;
-        QVector<int> marks;
+        QVector<mark_t> marks;
         QByteArray note;
     };
     struct AnnotatedTag
@@ -127,8 +128,12 @@ private:
     /* starts at 0, and counts up.  */
     mark_t last_commit_mark;
 
-    /* starts at maxMark and counts down. Reset after each SVN revision */
+    /* starts at maxMark and counts down. Reset after each checkpoint */
     mark_t next_file_mark;
+
+    /* Mapping of raw file content sha1 (NOT git object sha1!) to mark.
+       Gets reset after each checkpoint. */
+    QHash<QByteArray, mark_t> blob_marks;
 
     bool processHasStarted;
 
@@ -170,8 +175,8 @@ public:
         { txn->noteCopyFromBranch(prevbranch, revFrom); }
 
         void deleteFile(const QString &path) { txn->deleteFile(prefix + path); }
-        QIODevice *addFile(const QString &path, int mode, qint64 length)
-        { return txn->addFile(prefix + path, mode, length); }
+        QIODevice *addFile(const QString &path, int mode, qint64 length, QByteArray sha1_checksum)
+        { return txn->addFile(prefix + path, mode, length, sha1_checksum); }
 
         void commitNote(const QByteArray &noteText, bool append,
                         const QByteArray &commit)
@@ -465,10 +470,18 @@ FastImportRepository::~FastImportRepository()
     closeFastImport();
 }
 
+void FastImportRepository::checkpoint() {
+    fastImport.write("checkpoint\n");
+    qDebug() << "checkpoint!";
+
+    next_file_mark = maxMark;
+    blob_marks.clear();
+}
+
 void FastImportRepository::closeFastImport()
 {
     if (fastImport.state() != QProcess::NotRunning) {
-        fastImport.write("checkpoint\n");
+        checkpoint();
         fastImport.waitForBytesWritten(-1);
         fastImport.closeWriteChannel();
         if (!fastImport.waitForFinished()) {
@@ -641,8 +654,7 @@ Repository::Transaction *FastImportRepository::newTransaction(const QString &bra
     if ((++commitCount % CommandLineParser::instance()->optionArgument(QLatin1String("commit-interval"), QLatin1String("10000")).toInt()) == 0) {
         startFastImport();
         // write everything to disk every 10000 commits
-        fastImport.write("checkpoint\n");
-        qDebug() << "checkpoint!, marks file trunkated";
+        checkpoint();
     }
     outstandingTransactions++;
     return txn;
@@ -650,8 +662,6 @@ Repository::Transaction *FastImportRepository::newTransaction(const QString &bra
 
 void FastImportRepository::forgetTransaction(Transaction *)
 {
-    if (!--outstandingTransactions)
-        next_file_mark = maxMark;
 }
 
 void FastImportRepository::createAnnotatedTag(const QString &ref, const QString &svnprefix,
@@ -886,9 +896,20 @@ void FastImportRepository::Transaction::deleteFile(const QString &path)
     deletedFiles.append(pathNoSlash);
 }
 
-QIODevice *FastImportRepository::Transaction::addFile(const QString &path, int mode, qint64 length)
+QIODevice *FastImportRepository::Transaction::addFile(const QString &path, int mode, qint64 length, QByteArray sha1_checksum)
 {
-    mark_t mark = repository->next_file_mark--;
+    mark_t mark;
+    bool needsContent = false;
+    if (sha1_checksum.isEmpty()) {
+        mark = repository->next_file_mark--;
+        needsContent = true;
+    } else {
+        mark = repository->blob_marks[sha1_checksum];
+        if (!mark) {
+            repository->blob_marks[sha1_checksum] = mark = repository->next_file_mark--;
+            needsContent = true;
+        }
+    }
 
     // in case the two mark allocations meet, we might as well just abort
     Q_ASSERT(mark > repository->last_commit_mark + 1);
@@ -903,16 +924,16 @@ QIODevice *FastImportRepository::Transaction::addFile(const QString &path, int m
     modifiedFiles.append(repository->prefix + path.toUtf8());
     modifiedFiles.append("\n");
 
-    if (!CommandLineParser::instance()->contains("dry-run")) {
+    if (needsContent && !CommandLineParser::instance()->contains("dry-run")) {
         repository->startFastImport();
         repository->fastImport.writeNoLog("blob\nmark :");
         repository->fastImport.writeNoLog(QByteArray::number(mark));
         repository->fastImport.writeNoLog("\ndata ");
         repository->fastImport.writeNoLog(QByteArray::number(length));
         repository->fastImport.writeNoLog("\n", 1);
-    }
-
-    return &repository->fastImport;
+        return &repository->fastImport;
+    } else
+        return NULL;
 }
 
 void FastImportRepository::Transaction::commitNote(const QByteArray &noteText, bool append, const QByteArray &commit)

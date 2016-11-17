@@ -110,7 +110,8 @@ public:
         virtual void noteCopyFromBranch (const QString &prevbranch, int revFrom) = 0;
 
         virtual void deleteFile(const QString &path) = 0;
-        virtual QIODevice *addFile(const QString &path, int mode, qint64 length) = 0;
+        virtual QIODevice *addFile(const QString &path, int mode, qint64 length,
+                                 QByteArray sha1_checksum=QByteArray()) = 0;
 
         virtual void commitNote(const QByteArray &noteText, bool append,
                                 const QByteArray &commit = QByteArray()) = 0;

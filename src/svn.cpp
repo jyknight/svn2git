@@ -261,6 +261,15 @@ static int dumpBlob(Repository::Transaction *txn, svn_fs_root_t *fs_root,
 
     SVN_ERR(svn_fs_file_length(&stream_length, fs_root, pathname, dumppool));
 
+    svn_checksum_t *sha1_checksum_svn;
+    SVN_ERR(svn_fs_file_checksum(&sha1_checksum_svn, svn_checksum_sha1,
+                                 fs_root, pathname, /*force=*/false, dumppool));
+    if (!sha1_checksum_svn) {
+      fprintf(stderr, "SVN repository didn't have sha1?\n");
+      exit(1);
+    }
+    QByteArray sha1_checksum((const char*)sha1_checksum_svn->digest, /*sha1 digest size*/20);
+
     svn_stream_t *in_stream, *out_stream;
     if (!CommandLineParser::instance()->contains("dry-run")) {
         // open the file
@@ -289,9 +298,9 @@ static int dumpBlob(Repository::Transaction *txn, svn_fs_root_t *fs_root,
         }
     }
 
-    QIODevice *io = txn->addFile(finalPathName, mode, stream_length);
+    QIODevice *io = txn->addFile(finalPathName, mode, stream_length, sha1_checksum);
 
-    if (!CommandLineParser::instance()->contains("dry-run")) {
+    if (io && !CommandLineParser::instance()->contains("dry-run")) {
         // open a generic svn_stream_t for the QIODevice
         out_stream = streamForDevice(io, dumppool);
         SVN_ERR(svn_stream_copy3(in_stream, out_stream, NULL, NULL, dumppool));
@@ -1015,11 +1024,15 @@ int SvnRevision::addGitIgnore(apr_pool_t *pool, const char *key, QString path,
     QString gitIgnorePath = path + ".gitignore";
     if (content) {
         QIODevice *io = txn->addFile(gitIgnorePath, 33188, strlen(content));
-        io->write(content);
-        io->putChar('\n');
+        if (io) {
+            io->write(content);
+            io->putChar('\n');
+        }
     } else {
         QIODevice *io = txn->addFile(gitIgnorePath, 33188, 0);
-        io->putChar('\n');
+        if (io) {
+            io->putChar('\n');
+        }
     }
 
     return EXIT_SUCCESS;
