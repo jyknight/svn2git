@@ -23,6 +23,8 @@
 #include <QDir>
 #include <QFile>
 #include <QLinkedList>
+#include <unistd.h>
+#include <fcntl.h>
 
 static const int maxSimultaneousProcesses = 100;
 
@@ -60,6 +62,7 @@ public:
 
         void noteCopyFromBranch (const QString &prevbranch, int revFrom);
 
+        bool copyTreeTo(const QString &path, const QString &prevbranch, int revFrom, const QString &prevpath);
         void deleteFile(const QString &path);
         QIODevice *addFile(const QString &path, int mode, qint64 length, const QByteArray sha1_checksum);
 
@@ -115,6 +118,8 @@ private:
     QString name;
     QString prefix;
     LoggingQProcess fastImport;
+    int catBlobFd;
+    QFile catBlobPipe;
     int commitCount;
     int outstandingTransactions;
     QByteArray deletedBranches;
@@ -172,6 +177,9 @@ public:
 
         void noteCopyFromBranch (const QString &prevbranch, int revFrom)
         { txn->noteCopyFromBranch(prevbranch, revFrom); }
+
+        bool copyTreeTo(const QString &path, const QString &prevbranch, int revFrom, const QString &prevpath)
+        { return txn->copyTreeTo(prefix + path, prevbranch, revFrom, prefix + prevpath); }
 
         void deleteFile(const QString &path) { txn->deleteFile(prefix + path); }
         QIODevice *addFile(const QString &path, int mode, qint64 length, QByteArray sha1_checksum)
@@ -496,6 +504,10 @@ void FastImportRepository::closeFastImport()
                 qWarning() << "WARN: git-fast-import for repository" << name << "did not die";
         }
     }
+    if (catBlobPipe.isOpen()) {
+      catBlobPipe.close();
+      close(catBlobFd);
+    }
     processHasStarted = false;
     processCache.remove(this);
 }
@@ -772,8 +784,19 @@ FastImportRepository::msgFilter(QByteArray msg)
     return output;
 }
 
+static void setCloExec(int fd) {
+    int flags = fcntl(fd, F_GETFD);
+    if (flags == -1)
+        qFatal("While setting CLOEXEC: fcntl F_GETFD failed");
+    flags |= FD_CLOEXEC;
+    if (fcntl(fd, F_SETFD, flags) == -1)
+        qFatal("While setting CLOEXEC: fcntl F_SETFD failed");
+}
+
 void FastImportRepository::startFastImport()
 {
+    int pipefd[2];
+
     processCache.touch(this);
 
     if (fastImport.state() == QProcess::NotRunning) {
@@ -781,23 +804,37 @@ void FastImportRepository::startFastImport()
             qFatal("git-fast-import has been started once and crashed?");
         processHasStarted = true;
 
-        // start the process
-        QString marksFile = marksFileName(name);
-        QStringList marksOptions;
-        marksOptions << "--import-marks=" + marksFile;
-        marksOptions << "--export-marks=" + marksFile;
-        marksOptions << "--force";
-
         fastImport.setStandardOutputFile(logFileName(name), QIODevice::Append);
         fastImport.setProcessChannelMode(QProcess::MergedChannels);
 
         if (!CommandLineParser::instance()->contains("dry-run") && !CommandLineParser::instance()->contains("create-dump")) {
+            // start the process
+            QString marksFile = marksFileName(name);
+            QStringList marksOptions;
+            marksOptions << "--import-marks=" + marksFile;
+            marksOptions << "--export-marks=" + marksFile;
+            marksOptions << "--force";
+
+            if (pipe(pipefd) < 0)
+                qFatal("Failed to create cat-blob pipe.");
+            catBlobFd = pipefd[0];
+            setCloExec(catBlobFd);
+            if (!catBlobPipe.open(pipefd[0], QIODevice::ReadOnly))
+                qFatal("Failed to open cat-blob pipe.");
+
+            marksOptions << "--cat-blob-fd=" + QString::number(pipefd[1]);
+
             fastImport.start("git", QStringList() << "fast-import" << marksOptions);
         } else {
             fastImport.start("/bin/cat", QStringList());
         }
         fastImport.waitForStarted(-1);
 
+        if (catBlobPipe.isOpen()) {
+            close(pipefd[1]);
+            fastImport.write("feature ls\n");
+            flushProcessOutput(fastImport);
+        }
         reloadBranches();
     }
 }
@@ -888,6 +925,52 @@ void FastImportRepository::Transaction::noteCopyFromBranch(const QString &branch
             qDebug() << "merge point already recorded";
         }
     }
+}
+
+bool FastImportRepository::Transaction::copyTreeTo(const QString &path, const QString &prevbranch, int revFrom, const QString &prevpath)
+{
+    if (!repository->catBlobPipe.isOpen())
+        return false;
+
+    QByteArray markdescr;
+    long long mark = repository->markFrom(prevbranch, revFrom, markdescr);
+    if (mark <= 0)
+        return false;
+
+    QString prevpathNoSlash = repository->prefix + prevpath;
+    if(prevpathNoSlash.endsWith('/'))
+        prevpathNoSlash.chop(1);
+
+    QString pathNoSlash = repository->prefix + path;
+    if(pathNoSlash.endsWith('/'))
+      pathNoSlash.chop(1);
+
+    qDebug() << "Copying tree " << path << " from " << prevbranch << "@" << revFrom << " " << prevpath;
+    repository->fastImport.write("ls :" + QByteArray::number(mark) + " " + prevpathNoSlash.toUtf8() + "\n");
+    flushProcessOutput(repository->fastImport);
+    // Expected: <mode> SP ('blob' | 'tree' | 'commit') SP <dataref> HT <path> LF
+    // Or:       missing SP <path> LF
+    while (!repository->catBlobPipe.canReadLine() && repository->catBlobPipe.waitForReadyRead(-1)) ;
+    QByteArray response = repository->catBlobPipe.readLine();
+    qDebug() << "..got response " << response;
+
+    if (response.startsWith("missing"))
+        return false;
+    if (!response.startsWith("040000 tree ") || !response.contains('\t'))
+        return false;
+    // Extract <dataref>.
+    response.truncate(response.indexOf('\t'));
+    response = response.mid(12);
+
+    // Now, add modification.
+    if (modifiedFiles.capacity() == 0)
+        modifiedFiles.reserve(2048);
+    modifiedFiles.append("M 40000 ");
+    modifiedFiles.append(response);
+    modifiedFiles.append(' ');
+    modifiedFiles.append(repository->prefix + pathNoSlash.toUtf8());
+    modifiedFiles.append("\n");
+    return true;
 }
 
 void FastImportRepository::Transaction::deleteFile(const QString &path)

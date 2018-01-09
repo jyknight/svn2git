@@ -38,7 +38,7 @@ public:
             name.replace('/', '_');
             name.prepend("gitlog-");
             log.setFileName(name);
-            log.open(QIODevice::WriteOnly);
+            log.open(QIODevice::WriteOnly | QIODevice::Unbuffered);
         } else {
             logging = false;
         }
@@ -109,6 +109,7 @@ public:
 
         virtual void noteCopyFromBranch (const QString &prevbranch, int revFrom) = 0;
 
+        virtual bool copyTreeTo(const QString &path, const QString &prevbranch, int revFrom, const QString &prevpath) = 0;
         virtual void deleteFile(const QString &path) = 0;
         virtual QIODevice *addFile(const QString &path, int mode, qint64 length,
                                  QByteArray sha1_checksum=QByteArray()) = 0;

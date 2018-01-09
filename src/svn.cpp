@@ -916,12 +916,25 @@ int SvnRevision::exportInternal(const char *key, const svn_fs_path_change2_t *ch
         if (CommandLineParser::instance()->contains("empty-dirs") && ignoreSet == false) {
             if (addGitIgnore(pool, key, path, fs_root, txn) == EXIT_SUCCESS) {
                 return EXIT_SUCCESS;
-            } else {
-                ignoreSet = true;
             }
         }
 
+        if (path_from != NULL && prevrepository == repository &&
+            ignoreSet == false &&
+            !CommandLineParser::instance()->contains("svn-branches")) {
+            // If it's a within-repository directory copy, see if we can copy the tree on the
+            // git-side.  This can be much faster than re-exporting the whole directory tree from
+            // svn.e
+            //
+            // But -- don't do this if a .gitignore file was invented above (since it'd be blown
+            // away), or if --svn-branches was passed (since that's explicitly asking not to do this
+            // sort of thing).
+            if (txn->copyTreeTo(path, prevbranch, rev_from, prevpath))
+                return EXIT_SUCCESS;
+        }
+
         if (ignoreSet == false) {
+            // FIXME: isn't it a bug that this isn't done
             txn->deleteFile(path);
         }
         recursiveDumpDir(txn, fs_root, key, path, pool);
