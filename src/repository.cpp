@@ -373,6 +373,13 @@ static mark_t lastValidMark(QString name)
     return prev_mark;
 }
 
+static void flushProcessOutput(LoggingQProcess &p) {
+    while (p.bytesToWrite()) {
+        if (!p.waitForBytesWritten(-1))
+         qFatal("Failed to write to process: %s", qPrintable(p.errorString()));
+    }
+}
+
 int FastImportRepository::setupIncremental(int &cutoff)
 {
     QFile logfile(logFileName(name));
@@ -720,8 +727,7 @@ void FastImportRepository::finalizeTags()
 
         fastImport.write(message);
         fastImport.putChar('\n');
-        if (!fastImport.waitForBytesWritten(-1))
-            qFatal("Failed to write to process: %s", qPrintable(fastImport.errorString()));
+        flushProcessOutput(fastImport);
 
         // Append note to the tip commit of the supporting ref. There is no
         // easy way to attach a note to the tag itself with fast-import.
@@ -732,17 +738,14 @@ void FastImportRepository::finalizeTags()
             txn->commitNote(formatMetadataMessage(tag.svnprefix, tag.revnum, tagName.toUtf8()), true);
             delete txn;
 
-            if (!fastImport.waitForBytesWritten(-1))
-                qFatal("Failed to write to process: %s", qPrintable(fastImport.errorString()));
+            flushProcessOutput(fastImport);
         }
 
         printf(" %s", qPrintable(tagName));
         fflush(stdout);
     }
 
-    while (fastImport.bytesToWrite())
-        if (!fastImport.waitForBytesWritten(-1))
-            qFatal("Failed to write to process: %s", qPrintable(fastImport.errorString()));
+    flushProcessOutput(fastImport);
     printf("\n");
 }
 
@@ -1071,7 +1074,5 @@ void FastImportRepository::Transaction::commit()
     if (CommandLineParser::instance()->contains("add-metadata-notes"))
         commitNote(Repository::formatMetadataMessage(svnprefix, revnum), false);
 
-    while (repository->fastImport.bytesToWrite())
-        if (!repository->fastImport.waitForBytesWritten(-1))
-            qFatal("Failed to write to process: %s for repository %s", qPrintable(repository->fastImport.errorString()), qPrintable(repository->name));
+    flushProcessOutput(repository->fastImport);
 }
