@@ -47,7 +47,6 @@ public:
 
         QVector<int> merges;
 
-        QStringList deletedFiles;
         QByteArray modifiedFiles;
 
         inline Transaction() {}
@@ -893,7 +892,15 @@ void FastImportRepository::Transaction::deleteFile(const QString &path)
     QString pathNoSlash = repository->prefix + path;
     if(pathNoSlash.endsWith('/'))
         pathNoSlash.chop(1);
-    deletedFiles.append(pathNoSlash);
+
+    if (modifiedFiles.capacity() == 0)
+        modifiedFiles.reserve(2048);
+
+    if (pathNoSlash == "")
+        modifiedFiles.append("deleteall\n");
+    else {
+        modifiedFiles.append("D " + pathNoSlash.toUtf8() + "\n");
+    }
 }
 
 QIODevice *FastImportRepository::Transaction::addFile(const QString &path, int mode, qint64 length, QByteArray sha1_checksum)
@@ -1048,12 +1055,6 @@ void FastImportRepository::Transaction::commit()
             repository->fastImport.write("merge" + m + "\n");
         }
     }
-    // write the file deletions
-    if (deletedFiles.contains(""))
-        repository->fastImport.write("deleteall\n");
-    else
-        foreach (QString df, deletedFiles)
-            repository->fastImport.write("D " + df.toUtf8() + "\n");
 
     // write the file modifications
     repository->fastImport.write(modifiedFiles);
@@ -1063,7 +1064,7 @@ void FastImportRepository::Transaction::commit()
                                  + (desc.isEmpty() ? "" : " # merge from") + desc
                                  + "\n\n");
     printf(" %d modifications from SVN %s to %s/%s",
-           deletedFiles.count() + modifiedFiles.count('\n'), svnprefix.data(),
+           modifiedFiles.count('\n'), svnprefix.data(),
            qPrintable(repository->name), branch.data());
 
     // Commit metadata note if requested
