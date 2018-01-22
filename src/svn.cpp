@@ -790,7 +790,8 @@ int SvnRevision::exportInternal(const char *key, const svn_fs_path_change2_t *ch
     }
 
     // current == svnprefix => we're dealing with the contents of the whole branch here
-    if (path_from != NULL && current == svnprefix && path.isEmpty()) {
+    if (!CommandLineParser::instance()->contains("keep-branch-commit") &&
+        (path_from != NULL && current == svnprefix && path.isEmpty())) {
         if (previous != prevsvnprefix) {
             // source is not the whole of its branch
             qDebug() << qPrintable(current) << "is a partial branch of repository"

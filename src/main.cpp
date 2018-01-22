@@ -142,6 +142,7 @@ static const CommandLineOption options[] = {
     {"--stats", "after a run print some statistics about the rules"},
     {"--svn-branches", "Use the contents of SVN when creating branches, Note: SVN tags are branches as well"},
     {"--only-note-toplevel-merges", "When inferring merge points, only use copyfrom data when the source is the top-level of a branch."},
+    {"--keep-branch-commit", "Preserve the svn commit which makes a new git branch as a git commit on that branch."},
     {"--empty-dirs", "Add .gitignore-file for empty dirs"},
     {"--svn-ignore", "Import svn-ignore-properties via .gitignore"},
     {"--propcheck", "Check for svn-properties except svn-ignore"},
