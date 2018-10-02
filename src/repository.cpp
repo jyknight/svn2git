@@ -498,7 +498,7 @@ void FastImportRepository::closeFastImport()
         checkpoint();
         fastImport.waitForBytesWritten(-1);
         fastImport.closeWriteChannel();
-        if (!fastImport.waitForFinished()) {
+        if (!fastImport.waitForFinished(-1)) {
             fastImport.terminate();
             if (!fastImport.waitForFinished(200))
                 qWarning() << "WARN: git-fast-import for repository" << name << "did not die";
