@@ -636,14 +636,9 @@ int SvnRevision::exportEntry(const char *key, const svn_fs_path_change2_t *chang
     else if (is_dir) {
         if (change->change_kind == svn_fs_path_change_modify ||
             change->change_kind == svn_fs_path_change_add) {
-            if (path_from == NULL) {
-                // freshly added directory, or modified properties
-                // Git doesn't handle directories, so we don't either
-                //qDebug() << "   mkdir ignored:" << key;
-                return EXIT_SUCCESS;
+            if (path_from != NULL) {
+                qDebug() << "   " << key << "was copied from" << path_from << "rev" << rev_from;
             }
-
-            qDebug() << "   " << key << "was copied from" << path_from << "rev" << rev_from;
         } else if (change->change_kind == svn_fs_path_change_replace) {
             if (path_from == NULL)
                 qDebug() << "   " << key << "was replaced";
@@ -690,7 +685,7 @@ int SvnRevision::exportEntry(const char *key, const svn_fs_path_change2_t *chang
     if ( isHandled ) {
         return EXIT_SUCCESS;
     }
-    if (wasDir(fs, revnum - 1, key, revpool)) {
+    if (is_dir || wasDir(fs, revnum - 1, key, revpool)) {
         qDebug() << current << "was a directory; ignoring";
     } else if (change->change_kind == svn_fs_path_change_delete) {
         qDebug() << current << "is being deleted but I don't know anything about it; ignoring";
@@ -710,8 +705,8 @@ int SvnRevision::exportDispatch(const char *key, const svn_fs_path_change2_t *ch
     //  qDebug() << "rev" << revnum << qPrintable(current) << "matched rule:" << rule.lineNumber << "(" << rule.rx.pattern() << ")";
     switch (rule.action) {
     case Rules::Match::Ignore:
-        //if(ruledebug)
-        //    qDebug() << "  " << "ignoring.";
+        if(ruledebug)
+            qDebug() << "rev" << revnum << qPrintable(current) << "matched rule:" << rule.info() << "  " << "ignoring.";
         return EXIT_SUCCESS;
 
     case Rules::Match::Recurse:
@@ -934,11 +929,13 @@ int SvnRevision::exportInternal(const char *key, const svn_fs_path_change2_t *ch
                 return EXIT_SUCCESS;
         }
 
-        if (ignoreSet == false) {
-            // FIXME: isn't it a bug that this isn't done
-            txn->deleteFile(path);
+        if (!previous.isEmpty()) {
+            if (ignoreSet == false) {
+                // FIXME: isn't it a bug that this isn't done
+                txn->deleteFile(path);
+            }
+            recursiveDumpDir(txn, fs_root, key, path, pool);
         }
-        recursiveDumpDir(txn, fs_root, key, path, pool);
     }
 
     return EXIT_SUCCESS;
